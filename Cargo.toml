@@ -1,0 +1,83 @@
+[package]
+name = "mcp-protector"
+version = "0.1.0"
+edition = "2021"
+description = "Security proxy for the Model Context Protocol (MCP)"
+license = "MIT OR Apache-2.0"
+rust-version = "1.83"
+
+# ── Lint table ──────────────────────────────────────────────────────────────
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+
+# ── Runtime dependencies ─────────────────────────────────────────────────────
+[dependencies]
+
+# CLI argument parsing; derive feature enables #[derive(Parser)] for subcommands
+clap = { version = "4.5.60", features = ["derive"] }
+
+# Async runtime for concurrent agent connections and async I/O
+tokio = { version = "1.49.0", features = ["full"] }
+
+# MCP protocol implementation; delegates protocol parsing and version negotiation
+# Published by the modelcontextprotocol organisation at crates.io/crates/rmcp
+rmcp = { version = "0.16.0", features = ["server", "client"] }
+
+# Memory-safe TLS for upstream HTTPS; no OpenSSL dependency (NFR-S1).
+# default-features disabled to select ring (pure Rust) over aws-lc-rs (C lib)
+# so the build works without aws-lc-sys's large C compilation step.
+rustls = { version = "0.23.36", default-features = false, features = ["std", "tls12", "ring", "logging"] }
+
+# Async TLS integration layer bridging tokio streams with rustls.
+# default-features disabled to avoid pulling in aws-lc-rs via the aws_lc_rs
+# default feature; ring provides equivalent crypto with a pure-Rust build.
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["tls12", "ring", "logging"] }
+
+# Serialization framework; derive feature enables #[derive(Serialize, Deserialize)]
+serde = { version = "1.0.228", features = ["derive"] }
+
+# TOML config file parsing (config format specified in PRD)
+toml = { version = "1.0.3", features = ["parse"] }
+
+# JSON-Lines audit log serialization (FR16–FR19)
+serde_json = "1.0.149"
+
+# Structured diagnostics to stderr; async-aware spans and events
+tracing = "0.1.44"
+
+# Routes diagnostics to stderr; env-filter enables RUST_LOG-based filtering
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+
+# Cancellation token and codec/framing utilities for transport layers
+tokio-util = { version = "0.7.18", features = ["codec", "net"] }
+
+# Typed error enums for config and policy layers via #[derive(Error)]
+thiserror = "2.0.18"
+
+# Zeroize-on-drop credential storage; prevents accidental Debug leakage (NFR-S2)
+secrecy = { version = "0.10.3", features = ["serde"] }
+
+# Ergonomic `?` propagation in main.rs where all errors are fatal (Decision 7)
+anyhow = "1.0.101"
+
+# DateTime<Utc> with serde serializes to ISO 8601 for audit log timestamps
+chrono = { version = "0.4.43", features = ["serde"] }
+
+# Loads the platform's native certificate store for corporate CA support (Decision 9)
+rustls-native-certs = "0.8.3"
+
+# ── Dev dependencies ─────────────────────────────────────────────────────────
+[dev-dependencies]
+
+# Async test utilities compatible with tokio runtime
+tokio-test = "0.4.5"
+
+# CLI integration test helpers; spawns the binary and asserts on output/exit codes
+assert_cmd = "2.1.2"
+
+# Isolated temporary directories for config-file-based tests
+tempfile = "3.25.0"

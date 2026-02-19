@@ -1,0 +1,33 @@
+# mcp-protector example configuration
+# Copy this file and fill in the values for your deployment.
+
+[upstream]
+# The upstream MCP server to connect to.
+# Use "stdio" for a local subprocess, or an https:// URL for a remote server.
+# url = "stdio"
+# url = "https://your-mcp-server.example.com/mcp"
+url = "stdio"
+
+# Command to run as the upstream MCP subprocess (required when url = "stdio").
+# command = ["/usr/local/bin/my-mcp-server", "--flag"]
+command = ["/path/to/upstream-mcp-server"]
+
+# Optional bearer token authentication for HTTPS upstreams.
+# The token is stored securely and never written to logs.
+# [upstream.auth]
+# type = "bearer"
+# token = "YOUR_TOKEN_HERE"
+
+[listen]
+# Transport to accept agent connections on: "stdio" or "http"
+transport = "stdio"
+
+# Port to listen on (required when transport = "http")
+# port = 3000
+
+[policy]
+# Allowlist of tool names the proxy will permit.
+# Only tools listed here can be called by agents.
+# An empty list blocks all tool calls.
+# allow = ["read_file", "list_dir"]
+allow = []
