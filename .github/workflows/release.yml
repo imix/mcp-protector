@@ -96,9 +96,10 @@ jobs:
             archive: tar.gz
             cross: true
 
-          # macOS 13 runner is x86_64; use it for the Intel macOS target
+          # Cross-compiled on macos-latest (arm64); Apple clang supports both
+          # architectures natively — no extra toolchain setup required.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             archive: tar.gz
 
           # macos-latest is arm64 (Apple Silicon); native build for M-series
