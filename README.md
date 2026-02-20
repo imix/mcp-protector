@@ -1,5 +1,7 @@
 # mcp-protector
 
+[![CI](https://github.com/imix/mcp-protector/actions/workflows/ci.yml/badge.svg)](https://github.com/imix/mcp-protector/actions/workflows/ci.yml)
+
 An open-source security proxy for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) written in Rust.
 
 mcp-protector sits between AI agents and MCP servers, enforcing a tool allowlist so that agents can only call the tools you explicitly permit.
