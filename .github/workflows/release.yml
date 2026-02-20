@@ -161,9 +161,16 @@ jobs:
 
       # Strip debug symbols from Linux and macOS binaries to reduce artifact size.
       # Windows binaries are not stripped (strip.exe unavailable on MSVC runners).
+      # The cross-compiled aarch64-linux binary requires the target-specific strip;
+      # the host x86_64 strip cannot process it.
       - name: Strip binary (Linux and macOS)
         if: runner.os != 'Windows'
-        run: strip target/${{ matrix.target }}/release/mcp-protector
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            aarch64-linux-gnu-strip target/${{ matrix.target }}/release/mcp-protector
+          else
+            strip target/${{ matrix.target }}/release/mcp-protector
+          fi
 
       # Package binary into a .tar.gz (Linux/macOS) or .zip (Windows) archive.
       # Archive name format: mcp-protector-<target>.{tar.gz,zip}
