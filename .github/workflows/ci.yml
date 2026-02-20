@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Instruct cargo to not update the lock file during fetches
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── Job 1: check ─────────────────────────────────────────────────────────────
+  check:
+    name: cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (pinned to rust-version in Cargo.toml)
+        uses: dtolnay/rust-toolchain@1.83
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-
+            ${{ runner.os }}-cargo-
+
+      - name: cargo check
+        run: cargo check -q
+
+  # ── Job 2: test ──────────────────────────────────────────────────────────────
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (pinned to rust-version in Cargo.toml)
+        uses: dtolnay/rust-toolchain@1.83
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      - name: cargo test
+        run: cargo test -q
+
+  # ── Job 3: clippy ────────────────────────────────────────────────────────────
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with clippy component
+        uses: dtolnay/rust-toolchain@1.83
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+            ${{ runner.os }}-cargo-
+
+      - name: cargo clippy (deny all warnings)
+        run: cargo clippy -- -D warnings
+
+  # ── Job 4: audit ─────────────────────────────────────────────────────────────
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-audit-
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit (fail on any vulnerability advisory)
+        # --deny warnings promotes all advisories to failures, not just errors.
+        # --deny unsound catches soundness issues in addition to vulnerabilities.
+        run: cargo audit -q --deny warnings --deny unsound
+
+  # ── Job 5: coverage ──────────────────────────────────────────────────────────
+  coverage:
+    name: policy.rs branch coverage (100% gate)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with llvm-tools component
+        uses: dtolnay/rust-toolchain@1.83
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run branch coverage for policy.rs (100% gate)
+        # --branch enables branch-level (not just line-level) coverage tracking.
+        # --include-only-in-directory scopes the gate to src/policy.rs only, so
+        # incomplete coverage in config.rs or main.rs (which have stub paths that
+        # Story 2.x will fill) does not trigger a false failure here (NFR-M2).
+        # --fail-under-branches 100 exits non-zero if any branch in the selected
+        # files is not covered, enforcing the quality gate required by NFR-M2.
+        run: |
+          cargo llvm-cov \
+            --branch \
+            --include-only-in-directory src/policy \
+            --fail-under-branches 100 \
+            --quiet
