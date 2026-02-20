@@ -165,15 +165,20 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Run branch coverage for policy.rs (100% gate)
-        # --branch enables branch-level (not just line-level) coverage tracking.
-        # --include-only-in-directory scopes the gate to src/policy.rs only, so
-        # incomplete coverage in config.rs or main.rs (which have stub paths that
-        # Story 2.x will fill) does not trigger a false failure here (NFR-M2).
-        # --fail-under-branches 100 exits non-zero if any branch in the selected
-        # files is not covered, enforcing the quality gate required by NFR-M2.
+        # LLVM region coverage (the default instrumentation mode, stable Rust)
+        # tracks each then/else body and each match arm as a separate region,
+        # which is equivalent to branch coverage for the structured code in
+        # policy.rs.  --branch requires nightly and is not used here.
+        #
+        # --ignore-filename-regex excludes every source file except policy.rs so
+        # that stub paths in config.rs/main.rs (filled in Epic 2) do not cause
+        # false failures here (NFR-M2).  The pattern matches main, config, audit,
+        # proxy, shutdown, and anything under transport/ — leaving only policy.rs.
+        #
+        # --fail-under-regions 100 exits non-zero if any LLVM region in the
+        # remaining files is uncovered, enforcing the quality gate (NFR-M2).
         run: |
           cargo llvm-cov \
-            --branch \
-            --include-only-in-directory src/policy \
-            --fail-under-branches 100 \
+            --ignore-filename-regex "/(main|config|audit|proxy|shutdown|transport)" \
+            --fail-under-regions 100 \
             --quiet
