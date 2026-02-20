@@ -1,6 +1,6 @@
 [package]
 name = "mcp-protector"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2021"
 description = "Security proxy for the Model Context Protocol (MCP)"
 license = "MIT OR Apache-2.0"
