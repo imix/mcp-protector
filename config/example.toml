@@ -25,6 +25,19 @@ transport = "stdio"
 # Port to listen on (required when transport = "http")
 # port = 3000
 
+# Optional: restrict agent access (only valid when transport = "http").
+# GET /health is always accessible without credentials.
+#
+# Bearer token auth — agents must present Authorization: Bearer <token>:
+# [listen.auth]
+# type = "bearer"
+# token = "YOUR_AGENT_TOKEN_HERE"
+#
+# IP allowlist — restrict by source IP or CIDR range:
+# [listen.auth]
+# type = "ip_allowlist"
+# allow = ["10.0.0.0/8", "192.168.1.42/32", "::1/128"]
+
 [policy]
 # Allowlist of tool names the proxy will permit.
 # Only tools listed here can be called by agents.
