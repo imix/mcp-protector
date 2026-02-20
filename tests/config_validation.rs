@@ -15,8 +15,7 @@ use common::ConfigFixture;
 #[test]
 fn valid_stdio_config_exits_zero() {
     let fixture = ConfigFixture::new("config.toml", common::VALID_STDIO);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success();
@@ -25,8 +24,7 @@ fn valid_stdio_config_exits_zero() {
 #[test]
 fn valid_https_config_exits_zero() {
     let fixture = ConfigFixture::new("config.toml", common::VALID_HTTPS);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success();
@@ -49,8 +47,7 @@ transport = "stdio"
 allow = ["read_file"]
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success();
@@ -70,8 +67,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success();
@@ -93,8 +89,7 @@ transport = "http"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -120,8 +115,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -144,8 +138,7 @@ port = 99999
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -169,8 +162,7 @@ transport = "http"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    let output = Command::cargo_bin("mcp-protector")
-        .unwrap()
+    let output = Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -192,8 +184,7 @@ allow = []
 
 #[test]
 fn missing_config_file_reports_path_on_stderr() {
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", "/nonexistent-mcp-test.toml"])
         .assert()
         .failure()
@@ -215,8 +206,7 @@ fn symlink_config_path_exits_one_with_error() {
     let link = dir.path().join("link.toml");
     symlink(&real, &link).unwrap();
 
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", link.to_str().unwrap()])
         .assert()
         .failure()
@@ -238,8 +228,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -265,8 +254,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -289,8 +277,7 @@ port = 0
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -301,8 +288,7 @@ allow = []
 #[test]
 fn valid_config_produces_nothing_on_stdout() {
     let fixture = ConfigFixture::new("config.toml", common::VALID_STDIO);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()

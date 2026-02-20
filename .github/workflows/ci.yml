@@ -65,7 +65,9 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
-      - name: cargo test
+      - name: cargo test (deny all warnings)
+        env:
+          RUSTFLAGS: "-D warnings"
         run: cargo test -q
 
   # ── Job 3: clippy ────────────────────────────────────────────────────────────

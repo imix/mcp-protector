@@ -34,8 +34,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()
@@ -57,8 +56,7 @@ transport = "stdio"
 allow = ["read_file", "list_dir", "get_schema"]
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()
@@ -81,8 +79,7 @@ transport = "stdio"
 allow = ["Read_File", "WRITE_FILE", "execute_SQL"]
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::cargo_bin("mcp-protector")
-        .unwrap()
+    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success();
