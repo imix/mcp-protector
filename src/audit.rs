@@ -30,7 +30,10 @@ use tokio_util::sync::CancellationToken;
 // ── Schema version ────────────────────────────────────────────────────────────
 
 /// Current audit log schema version (public contract — never decrement).
-pub const LOG_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 when `agent_auth_rejected` and `agent_connected` events were
+/// added (Epic 5 — agent bearer token authentication).
+pub const LOG_SCHEMA_VERSION: u32 = 2;
 
 /// Capacity of the bounded audit log channel.
 ///
@@ -79,6 +82,26 @@ pub enum LogEvent {
         tools_upstream: u32,
         /// Number of tools returned to the agent after policy filtering.
         tools_returned: u32,
+    },
+    /// An incoming agent connection was rejected due to a failed authentication
+    /// check (e.g. missing or incorrect bearer token).
+    AgentAuthRejected {
+        /// Authentication method that was attempted (e.g. `"bearer"`).
+        method: String,
+        /// Human-readable reason for the rejection (e.g. `"missing token"`).
+        /// Must not include the token value or any secret material.
+        reason: String,
+    },
+    /// A new agent session was successfully established after passing
+    /// authentication (or when no authentication is configured).
+    AgentConnected {
+        /// Authentication method used to admit the session (e.g. `"bearer"`,
+        /// `"none"`).
+        method: String,
+        /// Agent identity extracted from the credential, when available.
+        /// `None` for bearer-token and unauthenticated sessions; populated
+        /// by mTLS (CN/SAN) and OIDC (`sub` claim) in later epics.
+        identity: Option<String>,
     },
 }
 
@@ -256,7 +279,7 @@ mod tests {
         let json = serde_json::to_string(&entry).unwrap();
         let v = parse(&json);
 
-        assert_eq!(v["version"], 1);
+        assert_eq!(v["version"], 2);
         assert_eq!(v["event"], "tool_call");
         assert_eq!(v["session_id"], "42");
         assert_eq!(v["upstream"], "my-server");
@@ -275,7 +298,7 @@ mod tests {
         let json = serde_json::to_string(&entry).unwrap();
         let v = parse(&json);
 
-        assert_eq!(v["version"], 1);
+        assert_eq!(v["version"], 2);
         assert_eq!(v["event"], "tools_list");
         assert_eq!(v["session_id"], "42");
         assert_eq!(v["upstream"], "my-server");
@@ -295,8 +318,8 @@ mod tests {
     }
 
     #[test]
-    fn log_schema_version_is_one() {
-        assert_eq!(LOG_SCHEMA_VERSION, 1);
+    fn log_schema_version_is_two() {
+        assert_eq!(LOG_SCHEMA_VERSION, 2);
     }
 
     #[test]
@@ -308,6 +331,49 @@ mod tests {
         let v = parse(&serde_json::to_string(&entry).unwrap());
         // session_id must be a JSON string ("42"), not a number (42).
         assert!(v["session_id"].is_string(), "session_id must be a JSON string");
+    }
+
+    #[test]
+    fn agent_auth_rejected_entry_serialises_correctly() {
+        let entry = make_entry(LogEvent::AgentAuthRejected {
+            method: "bearer".to_owned(),
+            reason: "missing token".to_owned(),
+        });
+        let json = serde_json::to_string(&entry).unwrap();
+        let v = parse(&json);
+
+        assert_eq!(v["version"], 2);
+        assert_eq!(v["event"], "agent_auth_rejected");
+        assert_eq!(v["method"], "bearer");
+        assert_eq!(v["reason"], "missing token");
+        assert!(v["timestamp"].is_string());
+    }
+
+    #[test]
+    fn agent_connected_entry_serialises_correctly() {
+        let entry = make_entry(LogEvent::AgentConnected {
+            method: "bearer".to_owned(),
+            identity: None,
+        });
+        let json = serde_json::to_string(&entry).unwrap();
+        let v = parse(&json);
+
+        assert_eq!(v["version"], 2);
+        assert_eq!(v["event"], "agent_connected");
+        assert_eq!(v["method"], "bearer");
+        assert!(v["identity"].is_null());
+    }
+
+    #[test]
+    fn agent_connected_with_identity_serialises_correctly() {
+        let entry = make_entry(LogEvent::AgentConnected {
+            method: "mtls".to_owned(),
+            identity: Some("CN=my-agent".to_owned()),
+        });
+        let json = serde_json::to_string(&entry).unwrap();
+        let v = parse(&json);
+
+        assert_eq!(v["identity"], "CN=my-agent");
     }
 
     // ── next_session_id ───────────────────────────────────────────────────────

@@ -292,7 +292,7 @@ port = 3000
 allow = ["search", "execute_tool"]
 ```
 
-Agent connects via HTTP:
+Agent connects via HTTP (add `Authorization` header when `[listen.auth]` is configured):
 
 ```python
 import requests
@@ -314,6 +314,7 @@ init_payload = {
 
 response = requests.post(
     "http://localhost:3000/mcp",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},  # omit if no listen.auth configured
     json=init_payload
 )
 
@@ -321,6 +322,89 @@ result = response.json()
 ```
 
 mcp-protector writes audit logs to stdout in HTTP mode. Monitor stdout for JSON-Lines audit events.
+
+## Authentication
+
+When `[listen.auth]` is configured in HTTP mode, agents must include an
+`Authorization: Bearer <token>` header in every request to `/mcp`.
+
+### Configuring bearer token auth
+
+Add the `[listen.auth]` section to your `config.toml`:
+
+```toml
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "bearer"
+token = "your-shared-secret-key"
+```
+
+Choose a token that is at least 32 characters of random printable characters
+(e.g. `openssl rand -base64 32`).
+
+### Agent request with bearer token
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:3000/mcp",
+    headers={"Authorization": "Bearer your-shared-secret-key"},
+    json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {...}}
+)
+```
+
+### 401 response
+
+Requests to `/mcp` without a valid bearer token receive HTTP 401 with a
+`WWW-Authenticate: Bearer` response header.  Verify the token value matches
+`listen.auth.token` in the config exactly (case-sensitive).
+
+### Health endpoint bypass
+
+`GET /health` is **always** accessible without credentials.  Container
+readiness probes do not need to supply a token.
+
+### Audit log events (bearer)
+
+- `agent_auth_rejected` — `method: "bearer"`, emitted on missing or incorrect token.
+- `agent_connected` — `method: "bearer"`, emitted when a session is established.
+
+## IP Allowlist
+
+When `[listen.auth] type = "ip_allowlist"` is configured, only requests from
+the specified source IP ranges can reach `/mcp`.
+
+### Configuring IP allowlist
+
+```toml
+[listen.auth]
+type = "ip_allowlist"
+allow = ["10.0.0.0/8", "192.168.1.42/32", "::1/128"]
+```
+
+**Notes:**
+- `allow` must be non-empty; an empty list is rejected as a configuration error.
+- IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) are automatically normalised
+  to IPv4 before the check. An IPv4 CIDR like `10.0.0.0/8` will match
+  connections presented as `::ffff:10.x.x.x` on dual-stack listeners.
+- `GET /health` is always accessible from any IP (for readiness probes).
+
+### 403 response
+
+Requests from IPs outside the allowlist receive HTTP 403 Forbidden.
+
+### Audit log events (IP allowlist)
+
+- `agent_auth_rejected` — `method: "ip_allowlist"`, `reason` includes the
+  blocked source IP.
+- `agent_connected` — `method: "ip_allowlist"`, emitted when a session is
+  established from an allowed IP.
+
+See [audit-log-schema.md](audit-log-schema.md) for full field details.
 
 ## Health Checks
 
@@ -348,6 +432,8 @@ Understanding what mcp-protector does in each failure mode helps you design reli
 | Upstream stdio process exits | Proxy exits — the agent receives a disconnect |
 | Upstream HTTPS server unreachable | Proxy exits with exit code 2 |
 | Agent disconnects (HTTP mode) | Session is cleaned up; proxy continues serving other agents |
+| Agent sends wrong/missing bearer token | 401 returned; `agent_auth_rejected` audit event; connection closed |
+| Agent connects from non-allowlisted IP | 403 returned; `agent_auth_rejected` audit event; connection closed |
 | Config validation failure | Exit code 1; all errors printed to stderr; no connection attempted |
 | Tool call blocked by policy | MCP error returned to agent (`METHOD_NOT_FOUND`); proxy continues |
 | Audit log channel full | Entry dropped; single `WARN` log emitted; proxy continues |

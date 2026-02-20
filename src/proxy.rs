@@ -28,7 +28,7 @@ use rmcp::{ErrorData, Peer, RoleClient, RoleServer, ServerHandler};
 use tokio_util::sync::CancellationToken;
 
 use crate::audit::{AuditSender, LogEntry, LogEvent, LOG_SCHEMA_VERSION};
-use crate::config::{Config, ListenConfig, UpstreamAuth, UpstreamConfig};
+use crate::config::{AgentAuth, Config, ListenConfig, UpstreamAuth, UpstreamConfig};
 use crate::transport::{agent_http, agent_stdio, upstream_https, upstream_stdio};
 use crate::{audit, policy};
 
@@ -213,11 +213,23 @@ pub(crate) async fn run(
         (ListenConfig::Stdio, UpstreamConfig::Https { url, auth }) => {
             run_stdio_to_https(url, auth, cfg.policy.allow, audit_tx, token).await
         }
-        (ListenConfig::Http { port }, UpstreamConfig::Stdio { command }) => {
-            run_http_to_stdio(port, command, cfg.policy.allow, audit_tx, token).await
+        (ListenConfig::Http { port, auth: listen_auth }, UpstreamConfig::Stdio { command }) => {
+            run_http_to_stdio(port, listen_auth, command, cfg.policy.allow, audit_tx, token).await
         }
-        (ListenConfig::Http { port }, UpstreamConfig::Https { url, auth }) => {
-            run_http_to_https(port, url, auth, cfg.policy.allow, audit_tx, token).await
+        (
+            ListenConfig::Http { port, auth: listen_auth },
+            UpstreamConfig::Https { url, auth: upstream_auth },
+        ) => {
+            run_http_to_https(
+                port,
+                listen_auth,
+                url,
+                upstream_auth,
+                cfg.policy.allow,
+                audit_tx,
+                token,
+            )
+            .await
         }
     }
 }
@@ -323,11 +335,21 @@ async fn run_stdio_to_https(
 /// closure; all sessions share the single upstream subprocess connection.
 async fn run_http_to_stdio(
     port: u16,
+    listen_auth: Option<AgentAuth>,
     command: Vec<String>,
     allowlist: HashSet<String>,
     audit_tx: AuditSender,
     token: CancellationToken,
 ) -> anyhow::Result<()> {
+    // Derive a stable upstream display name from the command before the async
+    // subprocess is spawned; used in auth-rejection audit events that fire
+    // before any upstream connection is established.
+    let upstream_name_hint = derive_upstream_name_from_command(&command);
+
+    // auth_method is included in AgentConnected audit events emitted by the
+    // session factory.
+    let auth_method = auth_method_name(listen_auth.as_ref());
+
     // Two synchronization primitives serve distinct roles:
     //
     // - `upstream_ready: Arc<AtomicBool>` — captured at route-registration
@@ -381,11 +403,23 @@ async fn run_http_to_stdio(
             // Block until the upstream peer is available.
             let guard = peer_rx.borrow();
             if let Some((peer, name)) = guard.as_ref() {
+                let session_id = audit::next_session_id();
+                // Emit AgentConnected to record the new session in the audit log.
+                audit_tx.send(&LogEntry {
+                    version: LOG_SCHEMA_VERSION,
+                    timestamp: chrono::Utc::now(),
+                    event: LogEvent::AgentConnected {
+                        method: auth_method.clone(),
+                        identity: None,
+                    },
+                    session_id: session_id.clone(),
+                    upstream: name.clone(),
+                });
                 Ok(ProxyHandler::new(
                     peer.clone(),
                     audit_tx.clone(),
                     Arc::clone(&allowlist),
-                    audit::next_session_id(),
+                    session_id,
                     name.clone(),
                 ))
             } else {
@@ -397,9 +431,17 @@ async fn run_http_to_stdio(
 
     tracing::info!(port, "mcp-protector started — transport: http, upstream: stdio");
 
-    agent_http::AgentHttpTransport::run(factory, port, Arc::clone(&upstream_ready), token.child_token())
-        .await
-        .context("HTTP agent transport error")?;
+    agent_http::AgentHttpTransport::run(
+        factory,
+        port,
+        Arc::clone(&upstream_ready),
+        listen_auth,
+        audit_tx.clone(),
+        upstream_name_hint,
+        token.child_token(),
+    )
+    .await
+    .context("HTTP agent transport error")?;
 
     Ok(())
 }
@@ -415,12 +457,19 @@ async fn run_http_to_stdio(
 /// A fresh [`ProxyHandler`] is created per HTTP session.
 async fn run_http_to_https(
     port: u16,
+    listen_auth: Option<AgentAuth>,
     url: String,
-    auth: Option<UpstreamAuth>,
+    upstream_auth: Option<UpstreamAuth>,
     allowlist: HashSet<String>,
     audit_tx: AuditSender,
     token: CancellationToken,
 ) -> anyhow::Result<()> {
+    // Derive a stable upstream display name from the URL before the async
+    // connection is established; used in auth-rejection audit events.
+    let upstream_name_hint = derive_upstream_name_from_url(&url);
+
+    let auth_method = auth_method_name(listen_auth.as_ref());
+
     // See `run_http_to_stdio` for an explanation of why both an AtomicBool
     // and a watch channel are used for upstream-ready signalling.
     let upstream_ready = Arc::new(AtomicBool::new(false));
@@ -433,8 +482,12 @@ async fn run_http_to_https(
         let upstream_ready = Arc::clone(&upstream_ready);
         let token = token.child_token();
         tokio::spawn(async move {
-            match upstream_https::UpstreamHttpsTransport::connect(&url, auth, token.child_token())
-                .await
+            match upstream_https::UpstreamHttpsTransport::connect(
+                &url,
+                upstream_auth,
+                token.child_token(),
+            )
+            .await
             {
                 Ok((service, name)) => {
                     let peer = service.peer().clone();
@@ -458,11 +511,22 @@ async fn run_http_to_https(
         move || {
             let guard = peer_rx.borrow();
             if let Some((peer, name)) = guard.as_ref() {
+                let session_id = audit::next_session_id();
+                audit_tx.send(&LogEntry {
+                    version: LOG_SCHEMA_VERSION,
+                    timestamp: chrono::Utc::now(),
+                    event: LogEvent::AgentConnected {
+                        method: auth_method.clone(),
+                        identity: None,
+                    },
+                    session_id: session_id.clone(),
+                    upstream: name.clone(),
+                });
                 Ok(ProxyHandler::new(
                     peer.clone(),
                     audit_tx.clone(),
                     Arc::clone(&allowlist),
-                    audit::next_session_id(),
+                    session_id,
                     name.clone(),
                 ))
             } else {
@@ -474,11 +538,64 @@ async fn run_http_to_https(
 
     tracing::info!(port, "mcp-protector started — transport: http, upstream: https");
 
-    agent_http::AgentHttpTransport::run(factory, port, Arc::clone(&upstream_ready), token.child_token())
-        .await
-        .context("HTTP agent transport error")?;
+    agent_http::AgentHttpTransport::run(
+        factory,
+        port,
+        Arc::clone(&upstream_ready),
+        listen_auth,
+        audit_tx.clone(),
+        upstream_name_hint,
+        token.child_token(),
+    )
+    .await
+    .context("HTTP agent transport error")?;
 
     Ok(())
+}
+
+// ── Internal utilities ────────────────────────────────────────────────────────
+
+/// Return a human-readable display name for use in auth-rejection audit events
+/// when the upstream name is not yet known (upstream connects asynchronously
+/// after the HTTP listener is already serving requests).
+///
+/// Uses the basename of the first command element, matching the logic in
+/// `upstream_stdio::derive_display_name`.
+fn derive_upstream_name_from_command(command: &[String]) -> String {
+    command
+        .first()
+        .map_or_else(
+            || "(unknown)".to_owned(),
+            |c| {
+                std::path::Path::new(c)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(c)
+                    .to_owned()
+            },
+        )
+}
+
+/// Return a human-readable display name for use in auth-rejection audit events
+/// when the upstream name is not yet known.
+///
+/// Uses the URL hostname, matching the logic in
+/// `upstream_https::derive_display_name`.
+fn derive_upstream_name_from_url(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.to_owned())
+}
+
+/// Return the `method` string for `AgentConnected` audit events.
+fn auth_method_name(auth: Option<&AgentAuth>) -> String {
+    match auth {
+        Some(AgentAuth::Bearer { .. }) => "bearer",
+        Some(AgentAuth::IpAllowlist { .. }) => "ip_allowlist",
+        None => "none",
+    }
+    .to_owned()
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

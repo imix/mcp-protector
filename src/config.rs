@@ -27,6 +27,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use ipnet::IpNet;
 use secrecy::{ExposeSecret as _, SecretBox};
 use serde::Deserialize;
 use thiserror::Error;
@@ -104,6 +105,31 @@ pub struct UpstreamAuth {
     pub bearer_token: SecretBox<String>,
 }
 
+/// Authentication method for agents connecting to the HTTP listener.
+///
+/// Bearer token credential is stored as a [`SecretBox<String>`] so that it
+/// never appears in `{:?}` debug output or tracing spans (NFR-S2).
+#[derive(Debug)]
+pub enum AgentAuth {
+    /// Static shared secret — agent must present this value as
+    /// `Authorization: Bearer <token>`.
+    Bearer {
+        /// The expected bearer token.  Call `.expose_secret()` only at the
+        /// comparison point in the auth middleware.
+        token: SecretBox<String>,
+    },
+    /// Source-IP allowlist — only requests from these CIDR ranges are
+    /// admitted.  IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) are
+    /// normalised to IPv4 before the check so IPv4 CIDRs match both native
+    /// IPv4 and IPv4-mapped IPv6 connections.
+    IpAllowlist {
+        /// Parsed and validated CIDR ranges.  Stored as `Vec<IpNet>` (not
+        /// raw strings) so the middleware performs O(n) containment checks
+        /// without re-parsing on every request.
+        ranges: Vec<IpNet>,
+    },
+}
+
 /// Agent-side listener configuration.
 #[derive(Debug)]
 pub enum ListenConfig {
@@ -113,10 +139,11 @@ pub enum ListenConfig {
     Http {
         /// TCP port to bind (1–65535).
         ///
-        /// Consumed by `transport/agent_http.rs` (Epic 3).
-        // Read by agent_http.rs in Epic 3.
-        #[allow(dead_code)]
+        /// Consumed by `transport/agent_http.rs`.
         port: u16,
+        /// Optional authentication requirement for incoming agent connections.
+        /// When `None`, the listener accepts any connection without credentials.
+        auth: Option<AgentAuth>,
     },
 }
 
@@ -158,6 +185,17 @@ struct RawListenConfig {
     /// Stored as u32 so we can detect values that exceed `u16::MAX` and report a
     /// human-readable validation error rather than a TOML parse error.
     port: Option<u32>,
+    auth: Option<RawListenAuth>,
+}
+
+#[derive(Deserialize)]
+struct RawListenAuth {
+    #[serde(rename = "type")]
+    auth_type: String,
+    /// Bearer token value — present for `type = "bearer"`.
+    token: Option<SecretBox<String>>,
+    /// CIDR range list — present for `type = "ip_allowlist"`.
+    allow: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +273,7 @@ pub fn load(path: &Path) -> Result<Config, Vec<ConfigError>> {
 /// Validate all fields in `raw` and collect every error found.
 ///
 /// Returns an empty `Vec` when the config is fully valid.
+#[allow(clippy::too_many_lines)] // validate() is intentionally comprehensive; splitting it would reduce readability
 fn validate(raw: &RawConfig) -> Vec<ConfigError> {
     let mut errors = Vec::new();
 
@@ -342,6 +381,69 @@ fn validate(raw: &RawConfig) -> Vec<ConfigError> {
         }
     }
 
+    // ── listen.auth ───────────────────────────────────────────────────────────
+    if let Some(auth) = &raw.listen.auth {
+        match auth.auth_type.as_str() {
+            "bearer" => {
+                if let Some(token) = &auth.token {
+                    // Only sanctioned expose_secret() call in config.rs for
+                    // listen.auth — used solely to validate non-emptiness.
+                    if token.expose_secret().trim().is_empty() {
+                        errors.push(ConfigError::InvalidField {
+                            field: "listen.auth.token".to_owned(),
+                            reason: "must not be empty or whitespace".to_owned(),
+                        });
+                    }
+                } else {
+                    errors.push(ConfigError::InvalidField {
+                        field: "listen.auth.token".to_owned(),
+                        reason: "required when listen.auth.type is 'bearer'".to_owned(),
+                    });
+                }
+            }
+            "ip_allowlist" => {
+                let allow = auth.allow.as_deref().unwrap_or(&[]);
+                if allow.is_empty() {
+                    errors.push(ConfigError::InvalidField {
+                        field: "listen.auth.allow".to_owned(),
+                        reason: "required and must be non-empty when \
+                                 listen.auth.type is 'ip_allowlist' \
+                                 (empty list would block all connections)"
+                            .to_owned(),
+                    });
+                } else {
+                    for (i, cidr) in allow.iter().enumerate() {
+                        if let Err(e) = cidr.parse::<IpNet>() {
+                            errors.push(ConfigError::InvalidField {
+                                field: format!("listen.auth.allow[{i}]"),
+                                reason: format!(
+                                    "'{cidr}' is not a valid CIDR range: {e}"
+                                ),
+                            });
+                        }
+                    }
+                }
+                // Verify the user didn't accidentally supply a `token` field.
+                if auth.token.is_some() {
+                    errors.push(ConfigError::InvalidField {
+                        field: "listen.auth.token".to_owned(),
+                        reason: "'token' is not valid for type = 'ip_allowlist'; \
+                                 use 'allow' instead"
+                            .to_owned(),
+                    });
+                }
+            }
+            unknown => {
+                errors.push(ConfigError::InvalidField {
+                    field: "listen.auth.type".to_owned(),
+                    reason: format!(
+                        "unknown value '{unknown}'; expected 'bearer' or 'ip_allowlist'"
+                    ),
+                });
+            }
+        }
+    }
+
     errors
 }
 
@@ -383,7 +485,28 @@ fn build_config(raw: RawConfig) -> Config {
                 .expect("port present for http transport — validated in validate()"),
         )
         .expect("port ≤ 65535 — validated in validate()");
-        ListenConfig::Http { port }
+        let auth = raw.listen.auth.map(|a| match a.auth_type.as_str() {
+            "bearer" => AgentAuth::Bearer {
+                // INVARIANT: token is Some and non-empty; enforced by validate()
+                token: a
+                    .token
+                    .expect("bearer token present — validated in validate()"),
+            },
+            "ip_allowlist" => AgentAuth::IpAllowlist {
+                // INVARIANT: allow is non-empty and every element parses; enforced by validate()
+                ranges: a
+                    .allow
+                    .expect("ip_allowlist allow list present — validated in validate()")
+                    .into_iter()
+                    .map(|s| {
+                        s.parse::<IpNet>()
+                            .expect("valid CIDR — validated in validate()")
+                    })
+                    .collect(),
+            },
+            _ => unreachable!("auth_type validated in validate()"),
+        });
+        ListenConfig::Http { port, auth }
     } else {
         ListenConfig::Stdio
     };
@@ -663,6 +786,275 @@ allow = []
             matches!(errors[0], ConfigError::ReadFailed { .. }),
             "expected ReadFailed, got: {:?}",
             errors[0]
+        );
+    }
+
+    // ── Story 5.1: listen.auth bearer token config ────────────────────────────
+
+    #[test]
+    fn listen_auth_bearer_config_is_valid() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "bearer"
+token = "my-secret-key"
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        assert!(load(&path).is_ok(), "bearer auth config must be valid");
+    }
+
+    #[test]
+    fn listen_auth_bearer_token_not_visible_in_debug() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "bearer"
+token = "super-secret-agent-key"
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let config = load(&path).unwrap();
+        let debug_output = format!("{config:?}");
+        assert!(
+            !debug_output.contains("super-secret-agent-key"),
+            "agent bearer token must not appear in debug output"
+        );
+    }
+
+    #[test]
+    fn listen_auth_unknown_type_reports_error() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "basic"
+token = "user:pass"
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let errors = load(&path).unwrap_err();
+        let field_error = errors.iter().find(|e| {
+            matches!(e, ConfigError::InvalidField { field, reason, .. }
+                if field == "listen.auth.type" && reason.contains("unknown value 'basic'"))
+        });
+        assert!(
+            field_error.is_some(),
+            "expected error for listen.auth.type with unknown value 'basic', got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn listen_auth_empty_token_reports_error() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "bearer"
+token = "   "
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let errors = load(&path).unwrap_err();
+        let field_error = errors.iter().find(|e| {
+            matches!(e, ConfigError::InvalidField { field, reason, .. }
+                if field == "listen.auth.token" && reason.contains("empty or whitespace"))
+        });
+        assert!(
+            field_error.is_some(),
+            "expected error for empty listen.auth.token, got: {errors:?}"
+        );
+    }
+
+    // ── Story 6.1: ip_allowlist config ───────────────────────────────────────
+
+    #[test]
+    fn listen_auth_ip_allowlist_valid_config() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "ip_allowlist"
+allow = ["10.0.0.0/8", "192.168.1.42/32", "::1/128"]
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        assert!(load(&path).is_ok(), "ip_allowlist config with valid CIDRs must be valid");
+    }
+
+    #[test]
+    fn listen_auth_ip_allowlist_stores_parsed_ranges() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "ip_allowlist"
+allow = ["10.0.0.0/8", "192.168.1.1/32"]
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let config = load(&path).unwrap();
+        let ListenConfig::Http { auth: Some(AgentAuth::IpAllowlist { ranges }), .. } =
+            config.listen
+        else {
+            panic!("expected IpAllowlist variant");
+        };
+        assert_eq!(ranges.len(), 2);
+    }
+
+    #[test]
+    fn listen_auth_ip_allowlist_empty_list_reports_error() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "ip_allowlist"
+allow = []
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let errors = load(&path).unwrap_err();
+        let field_error = errors.iter().find(|e| {
+            matches!(e, ConfigError::InvalidField { field, .. } if field == "listen.auth.allow")
+        });
+        assert!(
+            field_error.is_some(),
+            "expected error for empty ip_allowlist, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn listen_auth_ip_allowlist_invalid_cidr_reports_error() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "ip_allowlist"
+allow = ["not-a-cidr", "10.0.0.0/8"]
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let errors = load(&path).unwrap_err();
+        let field_error = errors.iter().find(|e| {
+            matches!(e, ConfigError::InvalidField { field, .. }
+                if field == "listen.auth.allow[0]")
+        });
+        assert!(
+            field_error.is_some(),
+            "expected error for invalid CIDR at index 0, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn listen_auth_ip_allowlist_missing_allow_reports_error() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "ip_allowlist"
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let errors = load(&path).unwrap_err();
+        let field_error = errors.iter().find(|e| {
+            matches!(e, ConfigError::InvalidField { field, .. } if field == "listen.auth.allow")
+        });
+        assert!(
+            field_error.is_some(),
+            "expected error for missing ip_allowlist allow, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn listen_auth_missing_token_reports_error() {
+        let toml = r#"
+[upstream]
+url = "https://example.com/mcp"
+
+[listen]
+transport = "http"
+port = 3000
+
+[listen.auth]
+type = "bearer"
+
+[policy]
+allow = []
+"#;
+        let (_f, path) = write_temp_config(toml);
+        let errors = load(&path).unwrap_err();
+        let field_error = errors.iter().find(|e| {
+            matches!(e, ConfigError::InvalidField { field, reason, .. }
+                if field == "listen.auth.token" && reason.contains("required"))
+        });
+        assert!(
+            field_error.is_some(),
+            "expected error for missing listen.auth.token, got: {errors:?}"
         );
     }
 }

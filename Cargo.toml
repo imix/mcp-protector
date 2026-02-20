@@ -82,6 +82,12 @@ chrono = { version = "0.4.43", features = ["serde"] }
 # Loads the platform's native certificate store for corporate CA support (Decision 9)
 rustls-native-certs = "0.8.3"
 
+# Constant-time byte comparison for bearer token validation (prevents timing attacks)
+subtle = "2"
+
+# CIDR parsing and IP-containment checks for IP allowlist auth (Epic 6)
+ipnet = "2"
+
 # ── Dev dependencies ─────────────────────────────────────────────────────────
 [dev-dependencies]
 

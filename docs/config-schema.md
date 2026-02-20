@@ -73,6 +73,55 @@ port = 3000
 
 This field is ignored when `transport` is `"stdio"`.
 
+#### `[listen.auth]` (table, optional)
+
+Authentication requirement for incoming agent connections. When omitted, the HTTP
+listener accepts any connection without credentials. Only valid when
+`transport = "http"`.
+
+`GET /health` is always accessible without credentials so that container
+readiness probes work without configuration changes.
+
+##### `type` (string, required when auth is present)
+
+Authentication method. One of:
+
+- `"bearer"` — require an `Authorization: Bearer <token>` header.
+- `"ip_allowlist"` — restrict access to specific source IP addresses or CIDR ranges.
+
+##### `token` (string, required when type = "bearer")
+
+The bearer token that agents must present in the `Authorization: Bearer <token>`
+header. Stored securely in memory with zeroization-on-drop. Never written to
+logs or debug output.
+
+The proxy uses constant-time comparison to prevent timing-oracle attacks.
+
+Example:
+```toml
+[listen.auth]
+type = "bearer"
+token = "your-shared-secret-key"
+```
+
+##### `allow` (array of strings, required when type = "ip_allowlist")
+
+List of IPv4 or IPv6 CIDR ranges permitted to connect. Must be non-empty (an
+empty list would block all connections and is rejected as a config error).
+
+- Standard CIDR notation: `"192.168.1.0/24"`, `"10.0.0.0/8"`, `"::1/128"`
+- Host routes are valid: `"192.168.1.42/32"`
+- IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) are normalised to IPv4 before
+  the check, so IPv4 CIDRs match both native IPv4 and IPv4-mapped IPv6
+  connections on dual-stack listeners.
+
+Example:
+```toml
+[listen.auth]
+type = "ip_allowlist"
+allow = ["10.0.0.0/8", "192.168.1.42/32", "::1/128"]
+```
+
 ### `[policy]` — Tool Allowlist
 
 Specifies which tools agents are permitted to call.
@@ -115,10 +164,21 @@ command = ["/usr/local/bin/my-mcp-server", "--debug"]
 [listen]
 # How the proxy accepts agent connections.
 # Either "stdio" (single agent via process stdio) or "http" (multiple agents via TCP).
-transport = "stdio"
+transport = "http"
 
 # TCP port (required when transport = "http").
-# port = 3000
+port = 3000
+
+# Optional: restrict agent access by bearer token or source IP.
+# GET /health is always accessible without credentials.
+# [listen.auth]
+# type = "bearer"
+# token = "your-shared-secret-key"
+#
+# Or, to restrict by source IP/CIDR:
+# [listen.auth]
+# type = "ip_allowlist"
+# allow = ["10.0.0.0/8", "192.168.1.42/32"]
 
 [policy]
 # Tool allowlist: only these tools can be called by agents.
@@ -147,4 +207,7 @@ The command exits with code 0 and prints `Config is valid.` to stderr if success
 | `upstream.auth.token` | Non-empty string when `type = "bearer"`. |
 | `listen.transport` | One of `"stdio"` or `"http"`. |
 | `listen.port` | Integer in range 1–65535, required when `transport = "http"`. |
+| `listen.auth.type` | Must be `"bearer"` or `"ip_allowlist"` if present. |
+| `listen.auth.token` | Non-empty, non-whitespace string when `type = "bearer"`. |
+| `listen.auth.allow` | Non-empty array of valid CIDR strings when `type = "ip_allowlist"`. |
 | `policy.allow` | Array of strings (may be empty). |
