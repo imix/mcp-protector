@@ -4,7 +4,7 @@ name: Release
 # This stub satisfies the architecture requirement for the file to exist
 # (see architecture.md: "CI pipeline setup → release.yml").
 # The full cross-compile matrix for Linux x86_64/aarch64, macOS x86_64/arm64,
-# and Windows x86_64 will be implemented in a future story (Epic 3 / FR30).
+# and Windows x86_64 will be implemented in a future story (Epic 4 / FR30).
 on:
   push:
     tags:
@@ -18,20 +18,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # TODO (Epic 3 / FR30): Set up cross-compilation toolchain for each
+      # TODO (Epic 4 / FR30): Set up cross-compilation toolchain for each
       # target triple (x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
       # x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-gnu).
 
-      # TODO (Epic 3 / FR30): Run the CI quality gates (check, test, clippy,
+      # TODO (Epic 4 / FR30): Run the CI quality gates (check, test, clippy,
       # audit, coverage) as a pre-release prerequisite.
 
-      # TODO (Epic 3 / FR30): Build optimised release binaries for each target
+      # TODO (Epic 4 / FR30): Build optimised release binaries for each target
       # with `cargo build --release --target <triple>`.
 
-      # TODO (Epic 3 / FR30): Strip binaries and compress with UPX or similar.
+      # TODO (Epic 4 / FR30): Strip binaries and compress with UPX or similar.
 
-      # TODO (Epic 3 / FR30): Upload build artefacts to GitHub Releases using
+      # TODO (Epic 4 / FR30): Upload build artefacts to GitHub Releases using
       # the `softprops/action-gh-release` action, attaching one archive per
       # target platform.
       - name: Placeholder step (release build not yet implemented)
-        run: echo "Release pipeline stub — implementation pending Epic 3 (FR30)"
+        run: echo "Release pipeline stub — implementation pending Epic 4 (FR30)"
