@@ -1,37 +1,247 @@
 name: Release
 
 # Trigger on semver tags pushed to the repository (e.g. v1.2.3).
-# This stub satisfies the architecture requirement for the file to exist
-# (see architecture.md: "CI pipeline setup → release.yml").
-# The full cross-compile matrix for Linux x86_64/aarch64, macOS x86_64/arm64,
-# and Windows x86_64 will be implemented in a future story (Epic 4 / FR30).
+# Builds optimised release binaries for five target platforms, runs all CI
+# quality gates as a pre-release prerequisite, then publishes a GitHub Release
+# with one archive per platform attached as a release asset (FR30, NFR-S4).
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: 1
+
 jobs:
-  build-and-release:
-    name: Build release binaries
+  # ── Job 1: CI quality gates ───────────────────────────────────────────────
+  # Run the full CI suite before building release artifacts.  If any gate
+  # fails the release is aborted — no broken binaries ever reach users.
+  ci:
+    name: CI quality gates
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # TODO (Epic 4 / FR30): Set up cross-compilation toolchain for each
-      # target triple (x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
-      # x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-gnu).
+      - name: Install Rust toolchain with clippy and llvm-tools
+        uses: dtolnay/rust-toolchain@1.88
+        with:
+          components: clippy,llvm-tools-preview
 
-      # TODO (Epic 4 / FR30): Run the CI quality gates (check, test, clippy,
-      # audit, coverage) as a pre-release prerequisite.
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-ci-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-ci-
+            ${{ runner.os }}-cargo-
 
-      # TODO (Epic 4 / FR30): Build optimised release binaries for each target
-      # with `cargo build --release --target <triple>`.
+      - name: cargo check
+        run: cargo check -q
 
-      # TODO (Epic 4 / FR30): Strip binaries and compress with UPX or similar.
+      - name: cargo test (deny all warnings)
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: cargo test -q
 
-      # TODO (Epic 4 / FR30): Upload build artefacts to GitHub Releases using
-      # the `softprops/action-gh-release` action, attaching one archive per
-      # target platform.
-      - name: Placeholder step (release build not yet implemented)
-        run: echo "Release pipeline stub — implementation pending Epic 4 (FR30)"
+      - name: cargo clippy (deny all warnings)
+        run: cargo clippy -- -D warnings
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit (fail on any vulnerability advisory)
+        run: cargo audit -q --deny warnings --deny unsound
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Branch coverage gate — policy.rs must be 100%
+        run: |
+          cargo llvm-cov \
+            --ignore-filename-regex "/(main|config|audit|proxy|shutdown|transport)" \
+            --fail-under-regions 100 \
+            --quiet
+
+  # ── Job 2: Build release binaries ────────────────────────────────────────
+  # Five-target matrix.  Each job: installs the target toolchain, optionally
+  # installs a cross-compiler (aarch64-linux only), builds the binary, strips
+  # it (Linux/macOS), and packages it as a .tar.gz or .zip archive.
+  build:
+    name: Build ${{ matrix.target }}
+    needs: ci
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+
+          # Cross-compiled on x86_64; requires gcc-aarch64-linux-gnu (Story 4.1 AC)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+
+          # macOS 13 runner is x86_64; use it for the Intel macOS target
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+
+          # macos-latest is arm64 (Apple Silicon); native build for M-series
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain and add target
+        uses: dtolnay/rust-toolchain@1.88
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-cargo-
+
+      # Only needed for the aarch64-unknown-linux-gnu cross-compile job.
+      # Provides the linker and C compiler required by ring's assembly sources.
+      - name: Install AArch64 cross-compiler (Linux aarch64 only)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Per-target audit ensures the exact Cargo.lock used for this binary
+      # has no known vulnerabilities at release time (NFR-S4).
+      - name: cargo audit
+        run: cargo audit -q --deny warnings --deny unsound
+
+      - name: Build release binary
+        env:
+          # Linker for the cross-compiled aarch64-linux target.
+          # ring requires CC to be set for its C/assembly sources.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross == true && 'aarch64-linux-gnu-gcc' || '' }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.cross == true && 'aarch64-linux-gnu-gcc' || '' }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Strip debug symbols from Linux and macOS binaries to reduce artifact size.
+      # Windows binaries are not stripped (strip.exe unavailable on MSVC runners).
+      - name: Strip binary (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: strip target/${{ matrix.target }}/release/mcp-protector
+
+      # Package binary into a .tar.gz (Linux/macOS) or .zip (Windows) archive.
+      # Archive name format: mcp-protector-<target>.{tar.gz,zip}
+      - name: Package archive (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: |
+          ARCHIVE="mcp-protector-${{ matrix.target }}.tar.gz"
+          tar czf "$ARCHIVE" \
+            -C "target/${{ matrix.target }}/release" \
+            mcp-protector
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "mcp-protector-${{ matrix.target }}.zip"
+          Compress-Archive `
+            -Path "target\${{ matrix.target }}\release\mcp-protector.exe" `
+            -DestinationPath $archive
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload archive as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-protector-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Job 3: Publish GitHub Release ────────────────────────────────────────
+  # Collect all five archives and create the GitHub Release with them attached.
+  # Runs only after all build jobs succeed.
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (needed for CHANGELOG.md in release notes)
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          # Include the tag name and a link to CHANGELOG.md in the release body.
+          body: |
+            ## mcp-protector ${{ github.ref_name }}
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for details.
+
+            ### Installation
+
+            Download the archive for your platform below, extract it, and place the `mcp-protector` binary on your `$PATH`.
+
+            | Platform | Archive |
+            |---|---|
+            | Linux x86_64 | `mcp-protector-x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux aarch64 | `mcp-protector-aarch64-unknown-linux-gnu.tar.gz` |
+            | macOS Intel | `mcp-protector-x86_64-apple-darwin.tar.gz` |
+            | macOS Apple Silicon | `mcp-protector-aarch64-apple-darwin.tar.gz` |
+            | Windows x86_64 | `mcp-protector-x86_64-pc-windows-msvc.zip` |
+
+            ### Quick start
+
+            ```bash
+            mcp-protector validate-config --config config.toml
+            mcp-protector proxy --config config.toml
+            ```
+          fail_on_unmatched_files: true
+          generate_release_notes: false

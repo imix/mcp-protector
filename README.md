@@ -8,6 +8,18 @@ mcp-protector sits between AI agents and MCP servers, enforcing a tool allowlist
 
 ## Installation
 
+### Pre-compiled binary (recommended)
+
+Download the latest release for your platform from the [GitHub Releases page](https://github.com/imix/mcp-protector/releases), extract the archive, and place the binary on your `$PATH`:
+
+| Platform | Archive |
+|---|---|
+| Linux x86\_64 | `mcp-protector-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `mcp-protector-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Intel | `mcp-protector-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `mcp-protector-aarch64-apple-darwin.tar.gz` |
+| Windows x86\_64 | `mcp-protector-x86_64-pc-windows-msvc.zip` |
+
 ### From source
 
 Clone the repository and build with Cargo:
