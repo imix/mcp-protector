@@ -4,7 +4,6 @@
 
 mod common;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 
 use common::ConfigFixture;
@@ -14,7 +13,7 @@ use common::ConfigFixture;
 #[test]
 fn valid_config_exits_zero_and_prints_confirmation_to_stderr() {
     let fixture = ConfigFixture::new("config.toml", common::VALID_STDIO);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()
@@ -36,7 +35,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -57,7 +56,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -67,7 +66,7 @@ allow = []
 #[test]
 fn validate_config_writes_nothing_to_stdout_on_success() {
     let fixture = ConfigFixture::new("config.toml", common::VALID_HTTPS);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()
@@ -88,7 +87,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .failure()
@@ -97,7 +96,7 @@ allow = []
 
 #[test]
 fn missing_config_file_exits_one_and_reports_path() {
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", "/nonexistent-mcp-protector.toml"])
         .assert()
         .failure()
@@ -107,7 +106,7 @@ fn missing_config_file_exits_one_and_reports_path() {
 
 #[test]
 fn help_lists_both_subcommands() {
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .arg("--help")
         .assert()
         .success()

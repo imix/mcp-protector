@@ -1,6 +1,6 @@
 //! Integration tests for policy enforcement (Story 1.5, FR5–FR9).
 //!
-//! The core policy logic (is_tool_allowed, filter_tools_list) is covered with
+//! The core policy logic (`is_tool_allowed`, `filter_tools_list`) is covered with
 //! 100% branch coverage by the inline `#[cfg(test)]` module in `src/policy.rs`.
 //!
 //! End-to-end policy enforcement through the proxy session loop will be tested
@@ -14,7 +14,6 @@
 
 mod common;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 
 use common::ConfigFixture;
@@ -34,7 +33,7 @@ transport = "stdio"
 allow = []
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()
@@ -56,7 +55,7 @@ transport = "stdio"
 allow = ["read_file", "list_dir", "get_schema"]
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success()
@@ -79,7 +78,7 @@ transport = "stdio"
 allow = ["Read_File", "WRITE_FILE", "execute_SQL"]
 "#;
     let fixture = ConfigFixture::new("config.toml", toml);
-    Command::from(assert_cmd::cargo_bin_cmd!("mcp-protector"))
+    assert_cmd::cargo_bin_cmd!("mcp-protector")
         .args(["validate-config", "--config", fixture.path.to_str().unwrap()])
         .assert()
         .success();

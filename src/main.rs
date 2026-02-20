@@ -53,8 +53,13 @@ async fn main() -> Result<()> {
     // Route all tracing diagnostics to stderr explicitly.  In stdio transport
     // mode stdout is the MCP protocol channel, so nothing must be written to
     // stdout by our logging infrastructure.
+    // Honour RUST_LOG when set; default to "info" level otherwise.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     let cli = Cli::parse();
