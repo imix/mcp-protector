@@ -86,6 +86,10 @@ A commented example configuration is available at [`config/example.toml`](config
 
 Every tool call and tools listing request is recorded in JSON-Lines format. See [`docs/audit-log-schema.md`](docs/audit-log-schema.md) for the complete audit event schema, field descriptions, and examples.
 
+## Agent Integration
+
+Ready to integrate mcp-protector with your AI agent? See [`docs/agent-integration.md`](docs/agent-integration.md) for setup instructions for Claude Code, VS Code, Cursor, Windsurf, Continue, and generic SDK patterns.
+
 ## Security
 
 mcp-protector enforces a **fail-closed** security model:
