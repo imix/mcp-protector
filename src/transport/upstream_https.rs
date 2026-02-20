@@ -72,22 +72,24 @@ impl UpstreamHttpsTransport {
 /// Build a `rustls::ClientConfig` loaded with the platform's native root
 /// certificate store.
 ///
-/// Any individual certificate load failures are logged at `WARN` level but
-/// do not abort the process — successfully loaded certificates are used.
-///
-/// Returns an error only if no certificates at all could be loaded.
+/// Individual certificate load failures are logged at `DEBUG` level (they
+/// are common in environments with mixed CA stores and are non-actionable
+/// unless *all* certificates fail to load).  The process aborts only when
+/// no certificates at all could be loaded.
 fn build_tls_config() -> anyhow::Result<rustls::ClientConfig> {
     let mut root_store = rustls::RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
-    // Log any load errors but continue with successfully loaded certs.
     for error in &certs.errors {
-        tracing::warn!("failed to load native cert: {error}");
+        tracing::debug!("skipped native cert (load error): {error}");
     }
+    let mut certs_loaded: usize = 0;
     for cert in certs.certs {
         root_store
             .add(cert)
             .context("failed to add certificate to root store")?;
+        certs_loaded += 1;
     }
+    tracing::debug!(certs_loaded, "native TLS certificate store loaded");
     if root_store.is_empty() {
         anyhow::bail!("no native root certificates could be loaded");
     }

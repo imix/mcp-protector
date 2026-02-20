@@ -92,67 +92,6 @@ fn derive_display_name(executable: &str) -> String {
         .to_owned()
 }
 
-/// Attempt a graceful termination of `child`.
-///
-/// On Unix platforms this sends SIGTERM (via `libc::kill`) and then waits for
-/// the process to exit.  On other platforms it calls `kill()` (forceful
-/// termination) since there is no standard signal API.
-///
-/// This function is best-effort; errors are logged but not propagated.
-#[allow(dead_code)] // called by proxy.rs during upstream cleanup
-pub(crate) async fn graceful_kill(mut child: tokio::process::Child) {
-    #[cfg(unix)]
-    {
-        if let Some(id) = child.id() {
-            // SAFETY: this is a Rust project with `unsafe_code = "forbid"`,
-            // so we delegate the SIGTERM via tokio's start_kill which uses
-            // `kill(2)` internally and returns a Result.
-            // `tokio::process::Child::start_kill` sends SIGKILL on Unix.
-            // For SIGTERM specifically we use libc directly:
-            //
-            // `id` is `u32`; cast to `i32` (PIDs on Linux are `i32` and
-            // never exceed `i32::MAX` in practice).
-            #[allow(clippy::cast_possible_wrap)]
-            let pid = id as i32;
-            // POSIX guarantees SIGTERM = 15.
-            // We do not use unsafe here — use `std::process` equivalent isn't
-            // available, so we fall back to tokio's kill (SIGKILL) as a
-            // safety net after a brief wait for graceful exit:
-            // send SIGTERM via the `kill` command shim (no nix dep needed).
-            let sigterm_sent = std::process::Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if !sigterm_sent {
-                tracing::warn!(
-                    "failed to send SIGTERM to upstream process {id}; \
-                     falling back to SIGKILL"
-                );
-                if let Err(err) = child.kill().await {
-                    tracing::warn!("failed to kill upstream process {id}: {err}");
-                }
-            }
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        if let Err(err) = child.kill().await {
-            tracing::warn!("failed to kill upstream process: {err}");
-        }
-    }
-
-    match child.wait().await {
-        Ok(status) => {
-            tracing::debug!("upstream process exited with status: {status}");
-        }
-        Err(err) => {
-            tracing::warn!("error waiting for upstream process to exit: {err}");
-        }
-    }
-}
-
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

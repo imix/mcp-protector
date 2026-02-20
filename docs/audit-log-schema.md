@@ -25,7 +25,7 @@ Every record contains these fields regardless of event type.
 | `version`    | number | Schema version (currently `1`).                                                        |
 | `timestamp`  | string | ISO 8601 / RFC 3339 UTC timestamp, e.g. `"2026-02-19T16:00:00.000Z"`.                 |
 | `event`      | string | Event type discriminator — `"tool_call"` or `"tools_list"`.                           |
-| `session_id` | string | Monotonically increasing decimal integer identifying this proxy session.               |
+| `session_id` | string | Monotonically increasing decimal-string identifying this proxy session (e.g. `"1"`).  |
 | `upstream`   | string | Display name of the upstream MCP server (basename of the command executable).         |
 
 ## Event: `tool_call`

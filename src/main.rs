@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
 
             // Audit log goes to stderr when the agent side is stdio (stdout is
             // the MCP channel in that mode).
-            let use_stderr = matches!(cfg.listen, config::ListenConfig::Stdio);
+            let audit_to_stderr = matches!(cfg.listen, config::ListenConfig::Stdio);
 
             // Set up graceful shutdown.
             let token = shutdown::create_token();
@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
 
             // Start the audit writer task.
             let (audit_tx, audit_handle) =
-                audit::start_writer(token.child_token(), use_stderr);
+                audit::start_writer(token.child_token(), audit_to_stderr);
 
             // Run the proxy; on error log and exit with code 2.
             if let Err(e) = proxy::run(cfg, audit_tx, token).await {

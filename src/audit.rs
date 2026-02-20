@@ -20,7 +20,8 @@
 //! ```
 
 use std::io::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -30,6 +31,13 @@ use tokio_util::sync::CancellationToken;
 
 /// Current audit log schema version (public contract — never decrement).
 pub const LOG_SCHEMA_VERSION: u32 = 1;
+
+/// Capacity of the bounded audit log channel.
+///
+/// When the channel is full, new entries are dropped rather than blocking
+/// the proxy's hot path.  A single `warn`-level log is emitted on the first
+/// drop to alert operators without flooding the log.
+const AUDIT_CHANNEL_CAPACITY: usize = 4096;
 
 // ── Log types ─────────────────────────────────────────────────────────────────
 
@@ -44,7 +52,7 @@ pub struct LogEntry {
     /// Event-specific payload (flattened into the top-level JSON object).
     #[serde(flatten)]
     pub event: LogEvent,
-    /// Monotonically increasing session identifier.
+    /// Monotonically increasing session identifier (decimal-string).
     pub session_id: String,
     /// Human-readable upstream server name (basename of the command, or the
     /// first element of the argv if no path separator is present).
@@ -79,10 +87,11 @@ pub enum LogEvent {
 /// Monotonically increasing session counter.
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Return a unique, monotonically increasing session identifier as a decimal
-/// string.
+/// Return a unique, monotonically increasing session identifier as a
+/// decimal-string (e.g. `"1"`, `"2"`, …).
 ///
 /// The counter starts at 1 and is safe for concurrent use across threads.
+/// The value serialises to a JSON string (quoted), not a JSON number.
 pub(crate) fn next_session_id() -> String {
     SESSION_COUNTER.fetch_add(1, Ordering::Relaxed).to_string()
 }
@@ -91,21 +100,48 @@ pub(crate) fn next_session_id() -> String {
 
 /// Cloneable handle to the audit writer task.
 ///
-/// Call [`AuditSender::send`] to enqueue a log entry.  Sending never blocks —
-/// if the writer task has exited the error is logged via `tracing` and the
-/// entry is silently dropped (rather than panicking).
+/// Call [`AuditSender::send`] to enqueue a log entry.  Sending never blocks:
+/// entries are serialised to JSON on the caller's task and placed in a bounded
+/// channel.  When the channel is full the entry is dropped and a single
+/// `warn`-level diagnostic is emitted (rather than panicking or blocking).
 #[derive(Clone, Debug)]
 pub struct AuditSender {
-    tx: mpsc::UnboundedSender<LogEntry>,
+    tx: mpsc::Sender<String>,
+    /// Set to `true` on the first channel-full drop to avoid log spam.
+    warned: Arc<AtomicBool>,
 }
 
 impl AuditSender {
-    /// Enqueue `entry` for writing.
+    /// Serialise `entry` to JSON and enqueue it for writing.
     ///
-    /// Logs to `tracing::warn` if the channel is closed, but never panics.
-    pub(crate) fn send(&self, entry: LogEntry) {
-        if let Err(err) = self.tx.send(entry) {
-            tracing::warn!("audit writer channel closed; entry dropped: {err}");
+    /// Serialisation happens on the caller's task (not the writer task) so
+    /// the writer can focus purely on I/O.  Returns without blocking even if
+    /// the channel is full — excess entries are silently dropped after a
+    /// one-time `warn` diagnostic.
+    pub(crate) fn send(&self, entry: &LogEntry) {
+        match serde_json::to_string(entry) {
+            Ok(mut json) => {
+                json.push('\n');
+                match self.tx.try_send(json) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        // Warn only once to avoid flooding the log under
+                        // pathological request rates.
+                        if !self.warned.swap(true, Ordering::Relaxed) {
+                            tracing::warn!(
+                                capacity = AUDIT_CHANNEL_CAPACITY,
+                                "audit log channel full; entries are being dropped"
+                            );
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        tracing::warn!("audit writer channel closed; entry dropped");
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!("failed to serialise audit entry: {err}");
+            }
         }
     }
 }
@@ -121,31 +157,38 @@ impl AuditSender {
 ///
 /// - `token`: cancellation token; the writer exits once cancelled **and** the
 ///   channel is drained.
-/// - `use_stderr`: when `true` the writer emits to `stderr` (stdio transport
-///   mode, where `stdout` is the MCP protocol channel).  When `false` it emits
-///   to `stdout` (HTTP transport mode).
+/// - `audit_to_stderr`: when `true` the writer emits to `stderr` (stdio
+///   transport mode, where `stdout` is the MCP protocol channel).  When
+///   `false` it emits to `stdout` (HTTP transport mode).
 pub(crate) fn start_writer(
     token: CancellationToken,
-    use_stderr: bool,
+    audit_to_stderr: bool,
 ) -> (AuditSender, JoinHandle<()>) {
-    let (tx, rx) = mpsc::unbounded_channel::<LogEntry>();
-    let sender = AuditSender { tx };
-    let handle = tokio::spawn(writer_task(rx, token, use_stderr));
+    let (tx, rx) = mpsc::channel::<String>(AUDIT_CHANNEL_CAPACITY);
+    let sender = AuditSender {
+        tx,
+        warned: Arc::new(AtomicBool::new(false)),
+    };
+    let handle = tokio::spawn(writer_task(rx, token, audit_to_stderr));
     (sender, handle)
 }
 
 /// Background writer task.
+///
+/// Receives pre-serialised JSON lines from the channel and writes them
+/// directly to the configured output stream.  All serialisation is done on
+/// the sender side; this task is pure I/O.
 async fn writer_task(
-    mut rx: mpsc::UnboundedReceiver<LogEntry>,
+    mut rx: mpsc::Receiver<String>,
     token: CancellationToken,
-    use_stderr: bool,
+    audit_to_stderr: bool,
 ) {
     loop {
         tokio::select! {
             biased;
-            entry = rx.recv() => {
-                match entry {
-                    Some(e) => write_entry(&e, use_stderr),
+            line = rx.recv() => {
+                match line {
+                    Some(s) => write_line(&s, audit_to_stderr),
                     // Channel closed — sender side dropped.
                     None => break,
                 }
@@ -155,38 +198,26 @@ async fn writer_task(
     }
 
     // Drain any remaining entries that arrived before cancellation.
-    while let Ok(entry) = rx.try_recv() {
-        write_entry(&entry, use_stderr);
+    while let Ok(line) = rx.try_recv() {
+        write_line(&line, audit_to_stderr);
     }
 
     // Flush the appropriate output stream.
-    if use_stderr {
+    if audit_to_stderr {
         let _ = std::io::stderr().flush();
     } else {
         let _ = std::io::stdout().flush();
     }
 }
 
-/// Serialise `entry` as a JSON-Lines record and write it to the configured
-/// output stream.  Errors are logged via `tracing::warn` rather than
-/// propagated (NFR-R2: no panics in production paths).
-fn write_entry(entry: &LogEntry, use_stderr: bool) {
-    match serde_json::to_string(entry) {
-        Ok(json) => {
-            if use_stderr {
-                let stderr = std::io::stderr();
-                let mut handle = stderr.lock();
-                // Ignore write errors — best-effort in production.
-                let _ = writeln!(handle, "{json}");
-            } else {
-                let stdout = std::io::stdout();
-                let mut handle = stdout.lock();
-                let _ = writeln!(handle, "{json}");
-            }
-        }
-        Err(err) => {
-            tracing::warn!("failed to serialise audit entry: {err}");
-        }
+/// Write a pre-serialised JSON line (including the trailing `\n`) to the
+/// configured output stream.  Errors are silently ignored — best-effort in
+/// production (NFR-R2: no panics).
+fn write_line(line: &str, audit_to_stderr: bool) {
+    if audit_to_stderr {
+        let _ = std::io::stderr().lock().write_all(line.as_bytes());
+    } else {
+        let _ = std::io::stdout().lock().write_all(line.as_bytes());
     }
 }
 
@@ -266,6 +297,17 @@ mod tests {
     #[test]
     fn log_schema_version_is_one() {
         assert_eq!(LOG_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn session_id_serialises_as_json_string_not_number() {
+        let entry = make_entry(LogEvent::ToolCall {
+            tool_name: "x".to_owned(),
+            allowed: true,
+        });
+        let v = parse(&serde_json::to_string(&entry).unwrap());
+        // session_id must be a JSON string ("42"), not a number (42).
+        assert!(v["session_id"].is_string(), "session_id must be a JSON string");
     }
 
     // ── next_session_id ───────────────────────────────────────────────────────

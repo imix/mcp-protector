@@ -86,9 +86,33 @@ A commented example configuration is available at [`config/example.toml`](config
 
 Every tool call and tools listing request is recorded in JSON-Lines format. See [`docs/audit-log-schema.md`](docs/audit-log-schema.md) for the complete audit event schema, field descriptions, and examples.
 
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | Success — clean shutdown or `validate-config` passed |
+| 1    | Configuration error — all field-level errors are printed to stderr before exit |
+| 2    | Runtime error — proxy failed after startup; details are in the tracing output |
+
+Automation scripts and health-check wrappers can rely on these codes to distinguish misconfiguration from runtime failure.
+
 ## Agent Integration
 
 Ready to integrate mcp-protector with your AI agent? See [`docs/agent-integration.md`](docs/agent-integration.md) for setup instructions for Claude Code, VS Code, Cursor, Windsurf, Continue, and generic SDK patterns.
+
+## Logging
+
+mcp-protector uses the `RUST_LOG` environment variable to control log verbosity. All tracing output goes to stderr (safe in both stdio and HTTP modes):
+
+```bash
+# Debug-level output for mcp-protector
+RUST_LOG=mcp_protector=debug mcp-protector proxy --config config.toml
+
+# Quiet (warnings only)
+RUST_LOG=warn mcp-protector proxy --config config.toml
+```
+
+See [`docs/debugging.md`](docs/debugging.md) for more examples and troubleshooting tips.
 
 ## Security
 

@@ -322,6 +322,38 @@ result = response.json()
 
 mcp-protector writes audit logs to stdout in HTTP mode. Monitor stdout for JSON-Lines audit events.
 
+## Health Checks
+
+In HTTP mode, mcp-protector exposes a `GET /health` endpoint suitable for use in container readiness probes and orchestrator health checks.
+
+| State | Status code | Body |
+|-------|-------------|------|
+| Upstream connected and ready | 200 OK | `{"status":"ok"}` |
+| Upstream handshake in progress | 503 Service Unavailable | `{"status":"starting"}` |
+
+Example systemd or Kubernetes readiness probe:
+
+```bash
+curl -sf http://localhost:3000/health
+```
+
+The endpoint returns 200 only once the full MCP handshake with the upstream server has succeeded. During the startup window (or if the upstream connection fails) it returns 503. When the upstream connection fails permanently, the proxy exits — so a 503 that persists beyond your expected startup window should be treated as a failure.
+
+## Error Behavior
+
+Understanding what mcp-protector does in each failure mode helps you design reliable integrations:
+
+| Failure mode | Behavior |
+|---|---|
+| Upstream stdio process exits | Proxy exits — the agent receives a disconnect |
+| Upstream HTTPS server unreachable | Proxy exits with exit code 2 |
+| Agent disconnects (HTTP mode) | Session is cleaned up; proxy continues serving other agents |
+| Config validation failure | Exit code 1; all errors printed to stderr; no connection attempted |
+| Tool call blocked by policy | MCP error returned to agent (`METHOD_NOT_FOUND`); proxy continues |
+| Audit log channel full | Entry dropped; single `WARN` log emitted; proxy continues |
+
+In stdio mode, the proxy is tied to a single agent connection. When the agent or upstream disconnects, the proxy process exits cleanly.
+
 ## Troubleshooting
 
 **Agent cannot connect to mcp-protector**

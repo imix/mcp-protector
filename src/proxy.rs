@@ -127,7 +127,7 @@ impl ServerHandler for ProxyHandler {
         let tools_returned =
             u32::try_from(filtered.len()).unwrap_or(u32::MAX);
 
-        self.audit_tx.send(LogEntry {
+        self.audit_tx.send(&LogEntry {
             version: LOG_SCHEMA_VERSION,
             timestamp: chrono::Utc::now(),
             event: LogEvent::ToolsList {
@@ -157,7 +157,7 @@ impl ServerHandler for ProxyHandler {
         let tool_name = params.name.as_ref().to_owned();
         let allowed = policy::is_tool_allowed(&tool_name, &self.allowlist);
 
-        self.audit_tx.send(LogEntry {
+        self.audit_tx.send(&LogEntry {
             version: LOG_SCHEMA_VERSION,
             timestamp: chrono::Utc::now(),
             event: LogEvent::ToolCall {
@@ -328,11 +328,18 @@ async fn run_http_to_stdio(
     audit_tx: AuditSender,
     token: CancellationToken,
 ) -> anyhow::Result<()> {
+    // Two synchronization primitives serve distinct roles:
+    //
+    // - `upstream_ready: Arc<AtomicBool>` — captured at route-registration
+    //   time by the axum `GET /health` handler closure.  It cannot be async
+    //   or hold a lock, so an atomic flag is the right fit.
+    //
+    // - `peer_rx: watch::Receiver` — captured by the factory closure that
+    //   creates a `ProxyHandler` per incoming HTTP session.  A watch channel
+    //   avoids holding an async lock across the closure boundary while still
+    //   delivering the peer handle once the upstream handshake completes.
     let upstream_ready = Arc::new(AtomicBool::new(false));
 
-    // Deferred state that the factory closure will populate once upstream
-    // connects.  We use a `tokio::sync::oneshot` to hand the peer from the
-    // upstream task to the HTTP layer once the handshake succeeds.
     let (peer_tx, peer_rx) =
         tokio::sync::watch::channel::<Option<(rmcp::Peer<RoleClient>, String)>>(None);
 
@@ -373,15 +380,17 @@ async fn run_http_to_stdio(
         move || {
             // Block until the upstream peer is available.
             let guard = peer_rx.borrow();
-            match guard.as_ref() {
-                Some((peer, name)) => Ok(ProxyHandler::new(
+            if let Some((peer, name)) = guard.as_ref() {
+                Ok(ProxyHandler::new(
                     peer.clone(),
                     audit_tx.clone(),
                     Arc::clone(&allowlist),
                     audit::next_session_id(),
                     name.clone(),
-                )),
-                None => Err(anyhow::anyhow!("upstream not yet connected")),
+                ))
+            } else {
+                tracing::warn!("session factory called before upstream connected");
+                Err(anyhow::anyhow!("Service temporarily unavailable"))
             }
         }
     };
@@ -412,6 +421,8 @@ async fn run_http_to_https(
     audit_tx: AuditSender,
     token: CancellationToken,
 ) -> anyhow::Result<()> {
+    // See `run_http_to_stdio` for an explanation of why both an AtomicBool
+    // and a watch channel are used for upstream-ready signalling.
     let upstream_ready = Arc::new(AtomicBool::new(false));
 
     let (peer_tx, peer_rx) =
@@ -446,15 +457,17 @@ async fn run_http_to_https(
         let allowlist = Arc::clone(&allowlist);
         move || {
             let guard = peer_rx.borrow();
-            match guard.as_ref() {
-                Some((peer, name)) => Ok(ProxyHandler::new(
+            if let Some((peer, name)) = guard.as_ref() {
+                Ok(ProxyHandler::new(
                     peer.clone(),
                     audit_tx.clone(),
                     Arc::clone(&allowlist),
                     audit::next_session_id(),
                     name.clone(),
-                )),
-                None => Err(anyhow::anyhow!("upstream not yet connected")),
+                ))
+            } else {
+                tracing::warn!("session factory called before upstream connected");
+                Err(anyhow::anyhow!("Service temporarily unavailable"))
             }
         }
     };
