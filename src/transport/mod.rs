@@ -11,10 +11,8 @@
 //!
 //! The policy engine and audit logger are transport-agnostic; they depend only
 //! on the trait interfaces defined here.
-//!
-//! Stub — full implementation across Stories 1.5–1.7.
 
-pub mod agent_http;
-pub mod agent_stdio;
-pub mod upstream_https;
-pub mod upstream_stdio;
+pub(crate) mod agent_http;
+pub(crate) mod agent_stdio;
+pub(crate) mod upstream_https;
+pub(crate) mod upstream_stdio;

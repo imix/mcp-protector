@@ -23,12 +23,6 @@
 //! allow = ["read_file"]         # exact tool names to permit; empty blocks all
 //! ```
 
-// The public types in this module (`Config`, `UpstreamConfig`, `ListenConfig`,
-// `PolicyConfig`, `UpstreamAuth`) form the typed configuration contract that
-// will be consumed by `proxy.rs` in Stories 2.x.  Until then, the fields are
-// not read from outside this module, so suppress the false-positive dead_code
-// warnings that the compiler emits for unused pub fields in a binary crate.
-#![allow(dead_code)]
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -82,10 +76,17 @@ pub enum UpstreamConfig {
         command: Vec<String>,
     },
     /// Connect to a remote server over HTTPS.
+    ///
+    /// `url` and `auth` are consumed by `transport/upstream_https.rs` (Epic 3).
     Https {
         /// Full `https://` URL of the upstream MCP endpoint.
+        // Used in Epic 3 (upstream_https.rs); field exists today so the enum
+        // variant compiles and the proxy.rs match arm returns an error.
+        #[allow(dead_code)]
         url: String,
         /// Optional bearer token authentication.
+        // Used in Epic 3 (upstream_https.rs).
+        #[allow(dead_code)]
         auth: Option<UpstreamAuth>,
     },
 }
@@ -97,7 +98,9 @@ pub enum UpstreamConfig {
 #[derive(Debug)]
 pub struct UpstreamAuth {
     /// The bearer token value.  Call `.expose_secret()` only at the HTTP
-    /// request injection point in `transport/upstream_https.rs`.
+    /// request injection point in `transport/upstream_https.rs` (Epic 3).
+    // Read by upstream_https.rs in Epic 3.
+    #[allow(dead_code)]
     pub bearer_token: SecretBox<String>,
 }
 
@@ -109,6 +112,10 @@ pub enum ListenConfig {
     /// Accept HTTP agent connections on the given TCP port.
     Http {
         /// TCP port to bind (1–65535).
+        ///
+        /// Consumed by `transport/agent_http.rs` (Epic 3).
+        // Read by agent_http.rs in Epic 3.
+        #[allow(dead_code)]
         port: u16,
     },
 }

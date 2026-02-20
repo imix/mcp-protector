@@ -21,9 +21,6 @@ use rmcp::model::Tool;
 ///
 /// Matching is byte-for-byte exact and case-sensitive (NFR-C1).  An empty
 /// `allowlist` always returns `false` (FR8).
-// Called by proxy.rs session layer (Story 2.5); suppress false-positive
-// dead_code warning while the proxy is not yet wired in the binary crate.
-#[allow(dead_code)]
 #[must_use]
 pub fn is_tool_allowed(tool_name: &str, allowlist: &HashSet<String>) -> bool {
     allowlist.contains(tool_name)
@@ -34,9 +31,6 @@ pub fn is_tool_allowed(tool_name: &str, allowlist: &HashSet<String>) -> bool {
 /// A tool is included in the result only when its name appears in **both** the
 /// upstream-provided list *and* the configured allowlist.  Tools present in the
 /// allowlist but absent from `tools` are silently excluded (NFR-C3).
-// Called by proxy.rs session layer (Story 2.5); suppress false-positive
-// dead_code warning while the proxy is not yet wired in the binary crate.
-#[allow(dead_code)]
 #[must_use]
 pub fn filter_tools_list(tools: Vec<Tool>, allowlist: &HashSet<String>) -> Vec<Tool> {
     tools

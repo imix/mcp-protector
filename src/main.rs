@@ -48,33 +48,52 @@ enum Command {
     },
 }
 
-// `main` returns `Result<()>` per Architecture Decision 7 (anyhow for fatal
-// errors at the top level).  The proxy subcommand will use `?` once the proxy
-// runtime is wired in Story 2.x; the return type is a permanent architectural
-// contract and must not be removed simply because no `?` is used yet.
-#[allow(clippy::unnecessary_wraps)]
-fn main() -> Result<()> {
-    // tracing_subscriber must be initialised as the very first statement so
-    // that all startup diagnostics, including argument parsing errors, are
-    // captured through the structured logging pipeline.
-    tracing_subscriber::fmt::init();
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Route all tracing diagnostics to stderr explicitly.  In stdio transport
+    // mode stdout is the MCP protocol channel, so nothing must be written to
+    // stdout by our logging infrastructure.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
 
     let cli = Cli::parse();
 
     match cli.command {
         Command::Proxy { config } => {
             tracing::info!(config = %config.display(), "starting proxy");
-            match config::load(&config) {
-                Ok(_cfg) => {
-                    // Stub — proxy runtime wired in Story 2.x
-                }
+            let cfg = match config::load(&config) {
+                Ok(cfg) => cfg,
                 Err(errors) => {
                     for error in &errors {
                         eprintln!("Error: {error}");
                     }
                     process::exit(1);
                 }
+            };
+
+            // Audit log goes to stderr when the agent side is stdio (stdout is
+            // the MCP channel in that mode).
+            let use_stderr = matches!(cfg.listen, config::ListenConfig::Stdio);
+
+            // Set up graceful shutdown.
+            let token = shutdown::create_token();
+            shutdown::install_handlers(token.clone());
+
+            // Start the audit writer task.
+            let (audit_tx, audit_handle) =
+                audit::start_writer(token.child_token(), use_stderr);
+
+            // Run the proxy; on error log and exit with code 2.
+            if let Err(e) = proxy::run(cfg, audit_tx, token).await {
+                tracing::error!("proxy runtime error: {e}");
+                // Wait for audit flush before exiting.
+                let _ = audit_handle.await;
+                process::exit(2);
             }
+
+            // Wait for the audit writer to flush all remaining entries.
+            let _ = audit_handle.await;
         }
         Command::ValidateConfig { config } => {
             tracing::info!(config = %config.display(), "validating config");
