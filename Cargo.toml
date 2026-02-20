@@ -30,12 +30,12 @@ rmcp = { version = "0.16.0", features = ["server", "client"] }
 # Memory-safe TLS for upstream HTTPS; no OpenSSL dependency (NFR-S1).
 # default-features disabled to select ring (pure Rust) over aws-lc-rs (C lib)
 # so the build works without aws-lc-sys's large C compilation step.
-rustls = { version = "0.23.36", default-features = false, features = ["std", "tls12", "ring", "logging"] }
+rustls = { version = "0.23.36", default-features = false, features = ["std", "ring", "logging"] }
 
 # Async TLS integration layer bridging tokio streams with rustls.
 # default-features disabled to avoid pulling in aws-lc-rs via the aws_lc_rs
 # default feature; ring provides equivalent crypto with a pure-Rust build.
-tokio-rustls = { version = "0.26.4", default-features = false, features = ["tls12", "ring", "logging"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "logging"] }
 
 # Serialization framework; derive feature enables #[derive(Serialize, Deserialize)]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -61,6 +61,9 @@ thiserror = "2.0.18"
 # Zeroize-on-drop credential storage; prevents accidental Debug leakage (NFR-S2)
 secrecy = { version = "0.10.3", features = ["serde"] }
 
+# URL parsing and validation for upstream.url field (HTTPS URL structural check)
+url = "2.5"
+
 # Ergonomic `?` propagation in main.rs where all errors are fatal (Decision 7)
 anyhow = "1.0.101"
 
@@ -81,3 +84,6 @@ assert_cmd = "2.1.2"
 
 # Isolated temporary directories for config-file-based tests
 tempfile = "3.25.0"
+
+# Predicate combinators for assert_cmd output assertions
+predicates = "3.1.3"
